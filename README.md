@@ -2,6 +2,24 @@
 
 AI built a portfolio intelligence dashboard using the Dealroom API to surface high-potential companies within an investor’s existing portfolio, helping VC teams identify opportunities to commit an early ticket at a potential discount and participate in the next raise. The dashboard shows priority signals, peer comparisons and model-training results, with XGBoost (highly efficient machine learning algorithm that builds a chain of decision trees to solve complex problems) estimating fundraising likelihood over 3, 6 and 9 months using API data on funding-round dates, amounts and stages, headcount, monthly web traffic, UK industry venture funding, and founders’ previous startups and universities, alongside derived features for round spacing, time since the last raise and relative industry position.
 
+## What it looks like
+
+The next-raise card leads with one company. Asterion Quantum is a synthetic demo, labelled as such, and is not one of the live holdings.
+
+![Next-raise signal for the synthetic Asterion Quantum demo, 87 percent within 3 months](docs/screenshots/next-raise-signal.png)
+
+The portfolio table lists the live holdings beside that demo. A dash means the live score is withheld.
+
+![Portfolio table with Asterion Quantum at 87 percent and live holdings showing unavailable signals](docs/screenshots/portfolio.png)
+
+Opening the demo shows the 3-month and 6-month XGBoost scores and the features that pushed the 3-month signal up.
+
+![Asterion Quantum detail with 87 percent at 3 months and 94 percent at 6 months](docs/screenshots/company-detail.png)
+
+A live company detail charts headcount and website visits against the global peer median. Periods with fewer than five reporting peers are left blank.
+
+![Headcount and website-visit charts against the peer median](docs/screenshots/peer-growth.png)
+
 ## Architecture
 
 Dealroom is read during import. PostgreSQL is the system of record after that. The dashboard, REST paths, and MCP read stored rows and do not call Dealroom when someone asks a question.
