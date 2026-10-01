@@ -1,0 +1,88 @@
+{
+  "name": "Asterion Quantum",
+  "industry": "Deep technology \u00b7 Quantum photonics",
+  "series": "Seed",
+  "next_stage": "Series A",
+  "last_venture_round": "Oct 2024",
+  "as_of": "2026-10-01",
+  "synthetic": true,
+  "model_version": "xgboost-synthetic-demo-v1",
+  "training_rows": 1800,
+  "test_rows": 600,
+  "horizons": {
+    "3": {
+      "score": 0.8660126328468323,
+      "evidence": [
+        {
+          "feature": "revenue_growth",
+          "label": "Annual revenue growth",
+          "value": "180%",
+          "contribution": 0.9722285270690918
+        },
+        {
+          "feature": "paid_pilots",
+          "label": "Paid pilot customers",
+          "value": "6 customers",
+          "contribution": 0.8808063864707947
+        },
+        {
+          "feature": "months_since_round",
+          "label": "Time since last round",
+          "value": "24 months",
+          "contribution": 0.5043081641197205
+        },
+        {
+          "feature": "technical_milestone",
+          "label": "Technical milestone complete",
+          "value": "Completed",
+          "contribution": 0.4138167202472687
+        },
+        {
+          "feature": "runway_months",
+          "label": "Cash runway",
+          "value": "9 months",
+          "contribution": 0.20391367375850677
+        }
+      ],
+      "brier_synthetic_test": 0.14112317772340052,
+      "base_margin": -1.108919620513916
+    },
+    "6": {
+      "score": 0.9375712871551514,
+      "evidence": [
+        {
+          "feature": "paid_pilots",
+          "label": "Paid pilot customers",
+          "value": "6 customers",
+          "contribution": 1.041013240814209
+        },
+        {
+          "feature": "revenue_growth",
+          "label": "Annual revenue growth",
+          "value": "180%",
+          "contribution": 0.9423695206642151
+        },
+        {
+          "feature": "months_since_round",
+          "label": "Time since last round",
+          "value": "24 months",
+          "contribution": 0.48185861110687256
+        },
+        {
+          "feature": "technical_milestone",
+          "label": "Technical milestone complete",
+          "value": "Completed",
+          "contribution": 0.445446640253067
+        },
+        {
+          "feature": "runway_months",
+          "label": "Cash runway",
+          "value": "9 months",
+          "contribution": 0.25865480303764343
+        }
+      ],
+      "brier_synthetic_test": 0.17847594681918935,
+      "base_margin": -0.46007513999938965
+    }
+  }
+}

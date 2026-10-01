@@ -1,6 +1,31 @@
 # XYZ Capital | Portfolio Sentinel
 
-A local portfolio intelligence dashboard for VC investment and portfolio teams, backed by Dealroom API records and an experimental XGBoost model of the next standardised funding stage. It helps investors prioritise founder conversations and evaluate opportunities to participate early in a portfolio company’s next raise. It does not estimate investment returns or guarantee a discounted ticket. The six configured holdings originated from the public Phoenix Court portfolio list; XYZ Capital is the dashboard branding. Company domains and Dealroom UUIDs are pinned in `sentinel/portfolio.py` to prevent same-name mismatches.
+AI built a portfolio intelligence dashboard using the Dealroom API to surface high-potential companies within an investor’s existing portfolio, helping VC teams identify opportunities to commit an early ticket at a potential discount and participate in the next raise. The dashboard shows priority signals, peer comparisons and model-training results, with XGBoost (highly efficient machine learning algorithm that builds a chain of decision trees to solve complex problems) estimating fundraising likelihood over 3, 6 and 9 months using API data on funding-round dates, amounts and stages, headcount, monthly web traffic, UK industry venture funding, and founders’ previous startups and universities, alongside derived features for round spacing, time since the last raise and relative industry position.
+
+## Architecture
+
+Dealroom is read during import. PostgreSQL is the system of record after that. The dashboard, REST paths, and MCP read stored rows and do not call Dealroom when someone asks a question.
+
+`sentinel/dealroom.py` is the only module that knows Dealroom URLs. `python -m sentinel.sync` runs `sentinel.live_sync`, which checks each holding against its pinned domain and UUID, then writes company, round, filing, traffic, team, and headcount rows. `python -m sentinel.pipeline` fits `xgboost-dealroom-live-v2` in `sentinel/real_model.py` on funding history from a separate UK cohort, and writes predictions and alerts. `uvicorn sentinel.api:app` serves the page, REST, and `POST /mcp` from that database. A model connected through MCP receives those tool results. It does not hold the Dealroom client secret and does not query the vendor API.
+
+Docker Compose starts Postgres 16 and the same API process. The web process creates tables only. Sync and the pipeline stay separate commands, so starting the server does not train a model or load demo rows.
+
+## Dealroom API
+
+Live import uses the Dealroom beta API at `https://api.beta.dealroom.app`. The adapter exchanges `DEALROOM_CLIENT_ID` and `DEALROOM_CLIENT_SECRET` at `https://accounts.dealroom.co/oauth/token` with the client-credentials grant, audience `https://api.beta.dealroom.app`. Every data request sends `Authorization: Bearer` and `X-Client-Id`. The OpenAPI reference is `https://developers.beta.dealroom.co/openapi.yaml`.
+
+| Use | Endpoint | What is kept |
+|---|---|---|
+| Holding identity | `GET /data/search` | One company match by pinned domain, or by exact name when no domain is set |
+| Holding record | `GET /data/companies/{uuid}` | Identity, website, headquarters, taxonomy |
+| Rounds | `GET /data/companies/{uuid}/funding-rounds` | Dated amounts, venture flag, standardised stage. Pages follow `page.next_cursor` |
+| Filings | `GET /data/companies/{uuid}/financials` | Revenue and employee filings. Optional |
+| Traffic | `GET /data/companies/{uuid}/web-traffic` | Monthly visits. Optional |
+| Team | `GET /data/companies/{uuid}/team` | Founder experience and university. Optional |
+| Headcount | `GET /data/companies/{uuid}/headcount-breakdown` | Employee counts. Percentage rows are not headcount. Optional |
+| Training cohort | `GET /data/companies` | Up to 40 UK-headquartered VC-backed companies per founding year, 2015–2022, Mature and Outside Tech excluded. Funding histories only |
+
+The six holdings are loaded with the full company record. The training cohort is loaded with funding rounds only, so current founder profiles and traction never enter a historical training row. `GET /analytics/timeseries?metric=vc_funding` and the wider UK company-panel query remain in the adapter. They do not feed `xgboost-dealroom-live-v2`.
 
 ## Set up and run with real data
 
@@ -38,9 +63,7 @@ Before applying a completed import, the importer saves a recoverable JSON snapsh
 
 ## Data fetched from Dealroom
 
-For the configured holdings, the adapter fetches company identity, website, headquarters and taxonomy from `/data/companies/{uuid}`; dated amounts, venture flags and standardised stages from `/funding-rounds`; revenue and employee filings from `/financials`; monthly visits from `/web-traffic`; founder experience and university context from `/team`; and employee counts from `/headcount-breakdown`. Identity lookup uses `/data/search`, and cohort selection uses `/data/companies`.
-
-The live training cohort fetches funding histories only. The six features below are the inputs to the current live XGBoost model. Industry-funding adapters and the legacy fixture model remain in the code, but industry time series, founder profiles and traction metrics do not feed the live model.
+Endpoints, authentication, and the fields kept from each response are in **Dealroom API** above. The live training cohort fetches funding histories only. The six features below are the inputs to the current live XGBoost model. Industry-funding adapters and the legacy fixture model remain in the code, but industry time series, founder profiles and traction metrics do not feed the live model.
 
 ## Model and validation
 
