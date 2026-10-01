@@ -9,3 +9,13 @@ __pycache__/
 .pg/
 .pgdata/
 models/
+
+.dealroom-cache/
+
+# Local exports and dashboard captures may contain client data.
+dashboard-preview*.jpg
+dashboard-preview*.png
+exports/
+backups/
+*.sql
+*.dump

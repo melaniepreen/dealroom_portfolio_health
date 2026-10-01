@@ -7,9 +7,13 @@ from sentinel.db import connect, init_schema
 from sentinel.model import score_portfolio, train
 
 
-def prepare(conn) -> dict:
-    metrics = train(conn)
-    score_portfolio(conn)
+def prepare(conn, fixture=False) -> dict:
+    if fixture:
+        metrics = train(conn)
+        score_portfolio(conn)
+    else:
+        from sentinel.real_model import fit_and_score
+        metrics = fit_and_score(conn)
     rebuild_alerts(conn)
     return metrics
 
@@ -26,7 +30,7 @@ def main() -> None:
             from sentinel.fixture import load_fixture
 
             load_fixture(conn)
-        metrics = prepare(conn)
+        metrics = prepare(conn, fixture=args.fixture)
     print(json.dumps({"device": metrics.get("device"), "beats_cadence": metrics.get("beats_cadence")}, default=str))
 
 

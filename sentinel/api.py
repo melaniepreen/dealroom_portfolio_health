@@ -3,27 +3,21 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from html import escape
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from sentinel.db import connect, init_schema
-from sentinel.fixture import load_fixture
-from sentinel.pipeline import prepare
-from sentinel.portfolio import PORTFOLIO
+from sentinel.dashboard import portfolio_dashboard
 from sentinel.tools import TOOL_NAMES, dispatch, dumps
 
 
 def startup() -> None:
     with connect() as conn:
         init_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS n FROM company")
-            count = cur.fetchone()["n"]
-        if count == 0:
-            load_fixture(conn)
-            prepare(conn)
+
 
 
 @asynccontextmanager
@@ -32,7 +26,9 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Portfolio Sentinel", lifespan=lifespan)
+app = FastAPI(title="XYZ Capital · Portfolio", lifespan=lifespan)
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _call(name: str, arguments: dict):
@@ -44,30 +40,16 @@ def _call(name: str, arguments: dict):
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(company: str = "Nila"):
-    brief = _call("generate_company_brief", {"company": company})
-    options = "".join(
-        f'<option value="{item["name"]}" {"selected" if item["name"] == company else ""}>{item["name"]}</option>'
-        for item in PORTFOLIO
-    )
-    signal = brief["readiness"]
-    question = escape(str(brief["question"]))
-    next_stage = escape(str(signal.get("next_stage") or "unknown"))
-    note = escape(str(signal.get("note") or ""))
-    step = escape(str(brief["next_step"]))
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Portfolio Sentinel</title></head>
-<body>
-<h1>Should I preempt this raise?</h1>
-<form method="get"><label>Company <select name="company">{options}</select></label>
-<button type="submit">Look up</button></form>
-<p>{question}</p>
-<p>Next stage: {next_stage}. Six-month model score: {signal.get("model_score_6m")}. Cadence score: {signal.get("cadence_score_6m")}.</p>
-<p>{note}</p>
-{brief.get("graph_svg") or ""}
-<p>Solid line is the company. Dashed line is the competitor median in the same industry.</p>
-<p>{step}</p>
-</body></html>"""
+def home():
+    return (STATIC_DIR / "index.html").read_text()
+
+
+@app.get("/portfolio")
+def portfolio(horizon: int = Query(3, ge=3, le=6)):
+    if horizon not in (3, 6):
+        raise HTTPException(status_code=422, detail="Choose 3 or 6 months.")
+    with connect() as conn:
+        return portfolio_dashboard(conn, horizon)
 
 
 @app.get("/alerts")

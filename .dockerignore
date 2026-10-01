@@ -5,3 +5,15 @@
 .pytest_cache
 __pycache__
 models
+
+.venv
+.pg
+.pgdata
+.dealroom-cache
+apis/SETUP.txt
+dashboard-preview*.jpg
+dashboard-preview*.png
+exports
+backups
+*.sql
+*.dump

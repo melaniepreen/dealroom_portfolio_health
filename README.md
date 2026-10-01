@@ -1,118 +1,90 @@
-# Portfolio Sentinel
+# XYZ Capital | Portfolio Sentinel
 
-A VC asks “should I preempt this raise?” or “how is this company doing?”. A sync reads Dealroom and writes PostgreSQL. The page, the REST paths, and MCP all read those stored rows. OpenAI does not call Dealroom. A score is a model output with a `model_version`. It is not a statement that the company is fundraising, and it is not a decision to lead the round.
+A local portfolio intelligence dashboard for VC investment and portfolio teams, backed by Dealroom API records and an experimental XGBoost model of the next standardised funding stage. It helps investors prioritise founder conversations and evaluate opportunities to participate early in a portfolio company’s next raise. It does not estimate investment returns or guarantee a discounted ticket. The six configured holdings originated from the public Phoenix Court portfolio list; XYZ Capital is the dashboard branding. Company domains and Dealroom UUIDs are pinned in `sentinel/portfolio.py` to prevent same-name mismatches.
 
-The example book is Phoenix Court: six public companies and three stealth pre-seeds. Competitors are other companies in the same UK industry and stage band. Industries are not added together. 2026 industry months are marked partial. Headquarters are United Kingdom only, and each company uses its industry tag rather than a same-named sector tag.
-
-| Company | Stage tag in this book | Industry |
-|---|---|---|
-| Nila | Pre-Seed | Health |
-| Frontier Computing | Pre-Seed | AI and machine learning |
-| Grafit | Seed | Manufacturing and industry |
-| Bron | Seed | Finance and payments |
-| Catalog | Series A | Marketplaces |
-| Dexory | Series A | Business operations |
-| Stealth Climate | Pre-Seed | Climate |
-| Stealth Deep Tech | Pre-Seed | Deep tech |
-| Stealth Transport | Pre-Seed | Transportation |
-
-Catalog and Dexory are tagged Series A here. The stored round stage is whatever Dealroom returns on a live sync. The three stealth names are expected misses and are stored as not found.
-
-## Run
+## Set up and run with real data
 
 ```bash
-docker compose up --build
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-Postgres and the API come up. With an empty database the API loads a recorded Dealroom fixture, trains on CPU, and serves http://localhost:8000. The page shows the six-month readiness signal and an SVG of the company against the competitor median.
+Set your Dealroom credentials and `DATABASE_URL` in the local `.env`. Export `DATABASE_URL` into your shell if you use a database other than the default. Keep this file private.
 
-`ML_DEVICE=cpu` is the default. XGBoost uses CUDA only when `ML_DEVICE=cuda` and `nvidia-smi` succeeds. This machine has no CUDA device, so the first model runs on CPU. The same training code is what later runs on an NVIDIA GPU.
-
-Live sync, from the host, with `DEALROOM_CLIENT_ID` and `DEALROOM_CLIENT_SECRET` in the gitignored `.env`:
+Start PostgreSQL, then import and train:
 
 ```bash
 python -m sentinel.sync
 python -m sentinel.pipeline
+uvicorn sentinel.api:app --host 127.0.0.1 --port 8001
 ```
 
-`python -m sentinel.pipeline --fixture` reloads the recorded rows and retrains without calling Dealroom. Credentials are never committed.
+Use `.venv/bin/python` and `.venv/bin/uvicorn` when running from the project virtual environment. PostgreSQL must be available at `DATABASE_URL`; its default is the local Sentinel database. The Dealroom adapter reads the existing gitignored `.env` containing `DEALROOM_CLIENT_ID` and `DEALROOM_CLIENT_SECRET`. It never prints the credentials.
 
-## Dealroom data a live sync fetches
+The web server creates schema only. It does **not** automatically load demo data or train a model. `docker compose up --build` starts the database and API at port 8000; explicitly run the sync and pipeline against that database to populate it.
 
-`python -m sentinel.sync` is the only path that calls Dealroom. Docker Compose and `python -m sentinel.pipeline --fixture` load the recorded fixture and do not call the API. The three stealth names are not requested. A search miss is stored as not found.
+## What the live import does
 
-**Each of the six public holdings.** Search by exact company name (`GET /data/search`, limit 5, type `company`), then load that uuid:
+`sentinel.sync` calls `sentinel.live_sync`. It verifies each holding against its website domain and pinned API UUID, then fetches company details, all funding-round pages, financials, web traffic, team and headcount breakdown. Optional endpoint failures produce missing data; they never produce invented observations. Headcount percentages are not employee counts. Standardised stages are never backfilled from self-reported round names. Year-only rounds are excluded from monthly modelling.
 
-| Endpoint | What is kept |
-|---|---|
-| `GET /data/companies/{uuid}` | Headquarters country, open jobs, valuation year and month |
-| `GET /data/companies/{uuid}/funding-rounds` | Up to 100 rounds: year, month, amount, standardised stage, and whether the round is venture |
-| `GET /data/companies/{uuid}/financials` | Filing year, revenue, and employees. An employee count is also stored as that year's December signal |
-| `GET /data/companies/{uuid}/web-traffic` | Monthly visits |
-| `GET /data/companies/{uuid}/team` | Up to 20 people: name, number of companies founded, and the first listed university |
-| `GET /data/companies/{uuid}/headcount-breakdown` | Monthly employee counts. Rows that are a share or a percentage are dropped |
+For training, it takes up to 40 UK-headquartered VC-backed companies from each founding-year cohort, 2015–2022, excluding Mature and Outside Tech. The country ID (93) was verified from the API's UK headquarters metadata; the documented `hq_location` filter is used. This is a bounded sample in the API's default order, **not** a random or exhaustive population sample. Closed companies are not explicitly excluded, but current VC-backed/non-mature selection still creates survivorship bias.
 
-Financials, traffic, team, and headcount are optional. A failed call is stored as empty.
+Training imports only those companies' funding histories. It does not import current founder profiles or traction into historical training rows. The live provenance marker is `company.source = 'dealroom_live'`; the model selects only that marker. Holdings are excluded from training.
 
-**One venture-funding series per industry on the book.** `GET /analytics/timeseries?metric=vc_funding`. The filter is United Kingdom headquarters, venture rounds only, Mature excluded (`growth_stage` 412), Outside Tech excluded (`taxonomy_id` 1102801), and that industry's taxonomy id. The industry family (id ending in 03) is used rather than a same-named sector tag. Months in 2026 are marked partial. Each industry is fetched on its own and the series are not added together.
+Requests share a rate limiter below five requests/second, retry transient errors, refresh a rejected token once, and follow `page.next_cursor` through the `cursor` request parameter. Successful responses are cached for 24 hours in the gitignored `.dealroom-cache/`. `live-manifest.json` records the cohort filters, sample counts, API tier and fetch time. Clear expired cache entries when a fresh same-day request is required. Responses with `locked` company records are rejected. The API reports a free tier; absent amounts remain missing, and access coverage is a limitation.
 
-**A UK panel for training and competitor medians.** `GET /data/companies` with limit 24, venture-backed, Mature excluded, Outside Tech excluded. A row is kept only when its headquarters is the United Kingdom and its name is not already one of the six holdings. Each kept company is loaded with the same company endpoints and stored outside the portfolio. Employee and traffic medians are then computed in Postgres from that panel. Those medians are not a Dealroom dataset.
+Before applying a completed import, the importer saves a recoverable JSON snapshot of the affected tables in `.dealroom-cache/before-live-*.json`. It replaces the holdings' demo facts, removes the identifiable synthetic `panel-*` rows and demo industry series, clears stale predictions/alerts, and removes the fixture's exact seeded Nila employee target. Other fund targets are retained. The pipeline must then be run to rebuild predictions and alerts.
 
-`./dealroom.sh` is a separate request. It lists the 10 highest-valued VC-backed companies founded since 2020 and does not fill these tables.
+## Data fetched from Dealroom
 
-## What the model uses
+For the configured holdings, the adapter fetches company identity, website, headquarters and taxonomy from `/data/companies/{uuid}`; dated amounts, venture flags and standardised stages from `/funding-rounds`; revenue and employee filings from `/financials`; monthly visits from `/web-traffic`; founder experience and university context from `/team`; and employee counts from `/headcount-breakdown`. Identity lookup uses `/data/search`, and cohort selection uses `/data/companies`.
 
-Feature names live in `FEATURE_NAMES` in [sentinel/model.py](sentinel/model.py).
+The live training cohort fetches funding histories only. The six features below are the inputs to the current live XGBoost model. Industry-funding adapters and the legacy fixture model remain in the code, but industry time series, founder profiles and traction metrics do not feed the live model.
 
-Dealroom history that a past month can rebuild: standardised stage, last venture amount, months since the last venture round, the company’s own spacing, employees, traffic, and the industry venture-funding level. Debt does not reset the clock. Hiring is a current flag only, because the jobs endpoint returns active posts. Runway, cash, and burn exist only when the fund has saved them.
+## Model and validation
 
-Founders: `prior_startup` and `university`. Missing university is its own value. The weight is the gain the training history assigns. A school is not given a manual boost.
+The live model is `xgboost-dealroom-live-v2`, implemented in `sentinel/real_model.py`. It predicts whether Dealroom records the **next standardised stage** in 3, 6 or 9 months. This is not a prediction of any cash raise, an active fundraising process, or investment quality.
 
-Industry position: each company series divided by that company’s own UK industry series, then the geometric mean of the ratios that exist. A missing series is dropped and listed. It is a feature, not the number the brief leads with.
+Six historical funding features are built identically for training and scoring:
 
-The comparison model is the round-cadence rule. XGBoost is fit on a UK panel wider than the nine holdings, scored on a later month, and kept beside the cadence rule. Libraries are `xgboost`, `scikit-learn` (the time split, precision at the top of the list, and a Brier calibration check), and `numpy`.
+- Last standardised venture stage.
+- Log of the last venture amount in USD.
+- Months since the last venture round.
+- Median gap between previous venture rounds.
+- Number of venture rounds known by the snapshot.
+- Log of total known venture funding (missing if any amount is unknown).
 
-## REST
+Debt and grants do not start the venture clock. Unknown stages and undated rounds cannot establish a modelling snapshot. Missing inputs stay missing. Current founder experience, university, current headcount and current traffic are excluded because their historical availability cannot be established from these imports.
 
-| Path | Returns |
-|---|---|
-| `GET /` | Local page for one company |
-| `GET /alerts` | Open alerts for the book |
-| `GET /companies/{name}/changes?lookback=6` | Feature change over the lookback |
-| `GET /companies/{name}/prediction` | Cadence rule and XGBoost scores at 3, 6, and 9 months |
-| `GET /companies/{name}/industry` | Company-versus-industry ratios and the geometric mean |
-| `GET /companies/{name}/targets` | Fund targets and Dealroom actuals, or the reason none were entered |
-| `GET /companies/{name}/brief` | Readiness signal, competitor graph, evidence |
-| `GET /retrieve?q=` | Stored passages for RAG |
-| `POST /mcp` | MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) |
+A stable company-level split assigns 60% to training, 20% to calibration and 20% to testing. Training uses quarterly snapshots from January 2018 through March 2022. Calibration uses 2023 snapshots; testing uses 2025 snapshots. Even nine-month outcome windows finish before the next split begins, and all test outcomes finish by July 2026. No company appears in multiple splits. Snapshots within one company remain correlated.
 
-MCP is at `http://localhost:8000/mcp`. [.cursor/mcp.json](.cursor/mcp.json) points at it. REST and MCP call the same functions.
+XGBoost uses fixed parameters and a fixed seed. A logistic calibrator is fit on the separate calibration companies. Stored metrics include sample/company/positive counts, Brier score, prevalence-baseline Brier score, average precision, ROC AUC and score range. A horizon needs at least 50 snapshots and 10 positive and negative outcomes in every split. Portfolio estimates are withheld unless the held-out Brier score and average precision beat the prevalence baseline, calibration is monotonic, and the company's stage has at least 10 training companies. Non-UK holdings are withheld because the training sample is UK-only.
 
-Tools: `retrieve_context`, `get_portfolio_alerts`, `get_company_changes`, `get_company_prediction`, `get_industry_position`, `get_company_targets`, `generate_company_brief`.
+Passing these checks is a minimum gate, not proof of production reliability. The UI labels estimates experimental. The bounded cohort, selection bias, missing funding events and correlated snapshots constrain what the scores mean. A 70% threshold identifies high signals; if no company clears it, the dashboard says so rather than manufacturing an alert.
 
-`retrieve_context` searches stored passages and returns source, date, and `fetched_at`. A question with no stored passage is answered as missing.
+## Dashboard and API
 
-`generate_company_brief` answers in this order: the readiness signal for the next stage, the competitor graph, then the evidence. The graph is an SVG with months on the horizontal axis and two lines, the company and the competitor median. The reply says the signal is not a decision to lead.
+The dashboard at `/` supports company search, stage filters, signal sorting and company detail panels. A 3-month/6-month switch updates the portfolio outlook, signals and company estimates, with 3 months selected by default. Suggested review actions are labelled as actions, rather than predicted events. The training report exposes validation counts, model status and feature gains. `/portfolio?horizon=3` or `/portfolio?horizon=6` returns the selected portfolio rows and model validation report.
 
-Alerts are `FUNDRAISING_WINDOW`, `EARLY_SIGNAL`, `TARGET_MISS`, `FINANCING_PRESSURE`, `PEER_MARKET_SHIFT`, and `DATA_ANOMALY`. Severity is `info`, `watch`, `attention`, or `urgent`. A model score alone cannot set severity. `TARGET_MISS` and `FINANCING_PRESSURE` appear only when the fund has entered a target or a short runway figure.
+A toggleable, fictional Asterion Quantum example illustrates an 84/100 high signal and the follow-up workflow. Its score is preset and excluded from portfolio counts, alerts and model training. Real scores remain unavailable when validation fails. The UI shows missing scores as unavailable, with their reasons in company detail.
 
-## Questions a VC can ask
+Existing endpoints remain available: `/alerts`, `/companies/{name}/changes`, `/companies/{name}/prediction`, `/companies/{name}/industry`, `/companies/{name}/targets`, `/companies/{name}/brief`, `/retrieve?q=`, and JSON-RPC `/mcp`. REST and MCP call the same stored-data functions. Fund-target and financing-pressure alerts require entered evidence; the model score does not determine their severity.
 
-- Should I preempt a Series A for Nila?
-- How is Frontier Computing doing at this stage, against its competitors?
-- Is Grafit ready for its next raise?
-- Is Bron hitting its targets, and what do its founders’ prior companies and universities do to the score?
-- Which portfolio companies look ready to preempt this month?
-- What do we have stored for Stealth Climate?
+Live industry series and competitor medians are not populated by the funding-only training import. Their absence is displayed as missing, not zero. Old synthetic industry comparisons are removed.
 
-## Tests
+## Tests and explicit demo mode
 
 ```bash
-pytest
+SKIP_DB=1 pytest -q
 ```
 
-The tests use the recorded fixture. They do not need a Dealroom key. PostgreSQL has to be listening at `DATABASE_URL` (the default matches `docker compose`).
+This runs normalization, identity, pagination and model temporal-boundary checks without altering the portfolio database. The database integration tests reload synthetic fixtures: run them **only against a disposable test database**.
 
-## Dealroom client
+`python -m sentinel.pipeline --fixture` explicitly resets the database to synthetic demo records and trains the legacy example model. Never use this command against a real imported portfolio. The fixture model and its old 91%/3% outputs are not real-world fundraising probabilities.
 
-`./dealroom.sh` still loads `.env` and lists the 10 highest-valued VC-backed companies founded since 2020. Counts and charts follow [apis/dealroom-api-analysis.md](apis/dealroom-api-analysis.md): venture rounds only, Mature and Outside Tech excluded, headquarters attribution, industry tag rather than a same-named sector tag, and the current year labeled partial.
+API reference: https://developers.beta.dealroom.co/openapi.yaml. Analyst definitions and scope conventions: `apis/dealroom-api-analysis.md`. `dealroom.sh` is an independent top-valuations example and does not populate the dashboard.
+
+## Credentials and private data
+
+Credentials are configured locally, never in source. `.gitignore` excludes `.env`, token files, API response caches, PostgreSQL data directories, model files, local exports, backups and dashboard captures. `.dockerignore` excludes these local artifacts from the build context. The checked-in portfolio names and domains describe a public example portfolio; fixture numbers and the Asterion scenario are illustrative. Live API records, database contents and training artifacts are not distributed with this repository. The Compose database credentials are local development defaults.

@@ -20,7 +20,7 @@ def venture_rounds(conn, company_id: str) -> list[dict]:
             """
             SELECT year, month, amount, standardized_round
             FROM funding_event
-            WHERE company_id = %s AND is_vc_round
+            WHERE company_id = %s AND is_vc_round AND year IS NOT NULL AND month BETWEEN 1 AND 12
             ORDER BY year, month
             """,
             (company_id,),
@@ -167,9 +167,10 @@ def founder_features(conn, company_id: str) -> dict:
         rows = list(cur.fetchall())
     if not rows:
         return {"prior_startup_count": None, "university": None, "missing": ["prior_startup", "university"]}
-    count = max((row["prior_startup_count"] or 0) for row in rows)
+    known_counts = [row["prior_startup_count"] for row in rows if row["prior_startup_count"] is not None]
+    count = max(known_counts) if known_counts else None
     universities = [row["university"] for row in rows if row["university"]]
-    missing = []
+    missing = [] if count is not None else ["prior_startup"]
     if not universities:
         missing.append("university")
     return {

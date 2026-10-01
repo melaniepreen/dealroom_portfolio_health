@@ -11,36 +11,8 @@ from sentinel.store import apply_dealroom_record, apply_industry_points, company
 
 
 def sync() -> None:
-    provider = LiveDealroomProvider.from_env()
-    fetched = datetime.now(timezone.utc)
-    with connect() as conn:
-        init_schema(conn)
-        seen = set()
-        for company in PORTFOLIO:
-            _sync_portfolio_company(conn, provider, company, fetched)
-            seen.add(company["name"].lower())
-        for industry in {company["industry"] for company in PORTFOLIO}:
-            endpoint, points = provider.industry_funding(industry)
-            if points:
-                apply_industry_points(conn, industry, points, fetched, endpoint)
-        for row in provider.uk_venture_panel():
-            name = row.get("name") or ""
-            if not name or name.lower() in seen:
-                continue
-            record = provider.company_record(row["uuid"])
-            apply_dealroom_record(
-                conn,
-                {
-                    "name": name,
-                    "industry": _industry_name(record) or "Unknown",
-                    "in_portfolio": False,
-                },
-                record,
-                fetched,
-            )
-            seen.add(name.lower())
-        refresh_peer_medians(conn)
-        conn.commit()
+    from sentinel.live_sync import run
+    run()
 
 
 def _sync_portfolio_company(conn, provider: LiveDealroomProvider, company: dict, fetched: datetime) -> None:

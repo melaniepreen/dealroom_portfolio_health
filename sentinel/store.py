@@ -24,7 +24,7 @@ def apply_dealroom_record(conn, spec: dict, record: dict, fetched: datetime) -> 
     cid = company_id(spec["name"])
     body = record.get("company") or {}
     snapshot = current_snapshot(body)
-    country = hq_country(body) or "United Kingdom"
+    country = hq_country(body)
     rounds = funding_rounds(record.get("rounds"))
     stage = _latest_vc_stage(rounds) or spec.get("stage_tag")
     with conn.cursor() as cur:
@@ -37,6 +37,7 @@ def apply_dealroom_record(conn, spec: dict, record: dict, fetched: datetime) -> 
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, 'dealroom', %s, '/data/companies')
             ON CONFLICT (id) DO UPDATE SET
                 hq_country = EXCLUDED.hq_country,
+                industry_name = EXCLUDED.industry_name,
                 stage = EXCLUDED.stage,
                 jobs_open = EXCLUDED.jobs_open,
                 valuation_year = EXCLUDED.valuation_year,

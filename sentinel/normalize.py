@@ -74,6 +74,8 @@ def funding_rounds(rows: list | None) -> list[dict]:
         if not isinstance(row, dict):
             continue
         year, month = year_month(row)
+        if not row.get("month") and not any(row.get(k) for k in ("date", "announced_date", "month_date")):
+            month = None  # A year-only round cannot establish a monthly outcome.
         amount = money(row.get("amount"))
         if amount is None:
             amount = money(row.get("amount_usd"))
@@ -82,7 +84,7 @@ def funding_rounds(rows: list | None) -> list[dict]:
                 "year": year,
                 "month": month,
                 "amount": amount,
-                "standardized_round": canonical_stage(row.get("standardized_round") or row.get("round")),
+                "standardized_round": canonical_stage(row.get("standardized_round")),
                 "is_vc_round": bool(row.get("is_vc_round")),
             }
         )

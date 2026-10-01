@@ -21,7 +21,7 @@ def db():
     try:
         with connect() as conn:
             load_fixture(conn)
-            prepare(conn)
+            prepare(conn, fixture=True)
             yield conn
     except Exception as exc:
         pytest.skip(f"PostgreSQL is not available: {exc}")
@@ -78,11 +78,24 @@ def test_debt_is_excluded_from_cadence(db):
     assert clock["months_since_last_vc"] == 19
 
 
-def test_stealth_miss_is_stored(db):
+def test_stealth_names_are_not_in_the_book(db):
     with db.cursor() as cur:
-        cur.execute("SELECT found_in_dealroom FROM company WHERE name = 'Stealth Climate'")
-        row = cur.fetchone()
-    assert row["found_in_dealroom"] is False
+        cur.execute("SELECT name FROM company WHERE name LIKE 'Stealth%'")
+        assert cur.fetchall() == []
+
+
+def test_brief_shows_series_dates_and_model_features(db):
+    from sentinel.model import FEATURE_NAMES
+    from sentinel.tools import company_brief
+
+    brief = company_brief(db, "Dexory")
+    assert brief["summary"]["series"] == "Series A"
+    assert any(row["label"] == "Mar 2024" and row["is_vc_round"] for row in brief["summary"]["rounds"])
+    assert [item["name"] for item in brief["model_features"]] == list(FEATURE_NAMES)
+    assert "Mar 2024" in brief["round_svg"]
+    assert "Nov 2024" in brief["graph_svg"]
+    assert brief["horizon_svg"]
+    assert brief["gain_svg"]
 
 
 def test_rest_matches_mcp(db):
@@ -110,10 +123,10 @@ def test_alerts_cite_evidence_and_do_not_use_the_model_as_severity(db):
 
     payload = portfolio_alerts(db)
     by_key = {(row["company"], row["type"]): row for row in payload["alerts"]}
-    stealth = by_key[("Stealth Climate", "DATA_ANOMALY")]
-    assert "No Dealroom" in stealth["title"]
-    assert stealth["missing"] == ["dealroom_record"]
-    assert stealth["next_step"]
+    assert not any(name.startswith("Stealth") for name, _kind in by_key)
+    gap = by_key[("Nila", "DATA_ANOMALY")]
+    assert "traffic_growth" in gap["missing"]
+    assert gap["next_step"]
     nila = by_key[("Nila", "TARGET_MISS")]
     assert nila["severity"] == "attention"
     assert nila["evidence"][0]["ratio"] < 1

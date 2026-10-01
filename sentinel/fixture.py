@@ -187,7 +187,7 @@ def _load_industry_series(cur) -> None:
 
 
 def _load_training_panel(cur) -> None:
-    """Extra UK companies so XGBoost is not fit on the nine holdings alone."""
+    """Extra UK companies so XGBoost is not fit on the six holdings alone."""
     for index in range(24):
         cid = f"panel-{index}"
         stage = "Seed" if index % 2 == 0 else "Pre-Seed"

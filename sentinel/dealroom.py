@@ -8,7 +8,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+import hashlib
+from pathlib import Path
+from dataclasses import dataclass, field
+import threading
 from typing import Protocol
 
 API = "https://api.beta.dealroom.app"
@@ -28,9 +31,18 @@ class LiveDealroomProvider:
     client_secret: str
     _token: str = ""
     _expires_at: float = 0
+    _request_lock: object = field(default_factory=threading.Lock, repr=False)
+    _last_request: float = 0
 
     @classmethod
     def from_env(cls) -> "LiveDealroomProvider":
+        # Load the existing local credentials without printing or rewriting them.
+        env_file = Path(__file__).resolve().parent.parent / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
         client_id = os.environ.get("DEALROOM_CLIENT_ID", "")
         client_secret = os.environ.get("DEALROOM_CLIENT_SECRET", "")
         if not client_id or not client_secret:
@@ -53,13 +65,16 @@ class LiveDealroomProvider:
             data=body,
             headers={"Content-Type": "application/json", "User-Agent": UA},
         )
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.load(response)
         self._token = payload["access_token"]
         self._expires_at = time.time() + int(payload["expires_in"])
         return self._token
 
     def get(self, path: str) -> dict | list:
+        cache = Path('.dealroom-cache') / (hashlib.sha256(path.encode()).hexdigest() + '.json')
+        if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+            return json.loads(cache.read_text())["response"]
         request = urllib.request.Request(
             API + path,
             headers={
@@ -68,31 +83,65 @@ class LiveDealroomProvider:
                 "User-Agent": UA,
             },
         )
-        try:
-            with urllib.request.urlopen(request) as response:
-                return json.load(response)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode()[:500]
-            raise RuntimeError(f"Dealroom {exc.code} for {path}: {detail}") from exc
+        for attempt in range(4):
+            with self._request_lock:
+                time.sleep(max(0, .26 - (time.monotonic() - self._last_request)))
+                self._last_request = time.monotonic()
+            try:
+                with urllib.request.urlopen(request, timeout=40) as response:
+                    payload = json.load(response)
+                cache.parent.mkdir(exist_ok=True)
+                cache.write_text(json.dumps({"path": path, "fetched_at": time.time(), "response": payload}))
+                return payload
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401 and attempt == 0:
+                    self._token = ""
+                    request.add_header("Authorization", f"Bearer {self._token_value()}")
+                    continue
+                if exc.code == 429 or exc.code >= 500:
+                    time.sleep(min(30, float(exc.headers.get('Retry-After') or 2 ** attempt)))
+                    continue
+                detail = exc.read().decode()[:500]
+                raise RuntimeError(f"Dealroom {exc.code} for {path}: {detail}") from exc
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                if attempt == 3:
+                    raise
+                time.sleep(2 ** attempt)
+        raise RuntimeError(f"Dealroom retries exhausted for {path}")
 
-    def search_company(self, name: str) -> dict | None:
-        payload = self.get("/data/search?" + urllib.parse.urlencode({"q": name, "limit": "5"}))
+    def funding_history(self, uuid: str) -> list:
+        rows, cursor = [], None
+        while True:
+            query = {"limit": 100}
+            if cursor:
+                query["cursor"] = cursor
+            payload = self.get(f"/data/companies/{uuid}/funding-rounds?" + urllib.parse.urlencode(query))
+            rows.extend(payload.get("data") or [])
+            nxt = (payload.get("page") or {}).get("next_cursor")
+            if not nxt:
+                return rows
+            if nxt == cursor:
+                raise RuntimeError('Funding pagination did not advance')
+            cursor = nxt
+
+    def search_company(self, name: str, domain: str | None = None) -> dict | None:
+        payload = self.get("/data/search?" + urllib.parse.urlencode({"q": name, "limit": "20", "types": "company"}))
         rows = payload.get("data") if isinstance(payload, dict) else []
-        for row in rows or []:
-            if str(row.get("name", "")).lower() == name.lower() and row.get("type") == "company":
-                return row
-        return None
+        matches = [row for row in rows or [] if str(row.get("name", "")).lower() == name.lower() and row.get("type") == "company"]
+        if domain:
+            matches = [row for row in rows or [] if str(row.get("website_domain") or "").lower().removeprefix("www.") == domain.lower().removeprefix("www.")]
+        return matches[0] if len(matches) == 1 else None
 
     def company_record(self, uuid: str) -> dict:
         company = self.get(f"/data/companies/{uuid}")
-        rounds = self.get(f"/data/companies/{uuid}/funding-rounds?limit=100")
+        rounds = self.funding_history(uuid)
         financials = self._optional(f"/data/companies/{uuid}/financials")
         traffic = self._optional(f"/data/companies/{uuid}/web-traffic")
         team = self._optional(f"/data/companies/{uuid}/team?limit=20")
         headcount = self._optional(f"/data/companies/{uuid}/headcount-breakdown")
         return {
             "company": company.get("data") if isinstance(company, dict) else company,
-            "rounds": rounds.get("data") if isinstance(rounds, dict) else [],
+            "rounds": rounds,
             "financials": financials.get("data") if isinstance(financials, dict) else [],
             "traffic": traffic.get("data") if isinstance(traffic, dict) else [],
             "team": team.get("data") if isinstance(team, dict) else [],
@@ -144,7 +193,7 @@ class LiveDealroomProvider:
         return path, rows or []
 
     def uk_venture_panel(self, limit: int = 24) -> list[dict]:
-        """A UK venture-backed panel wider than the nine holdings. HQ is checked on each row."""
+        """A UK venture-backed panel wider than the six holdings. HQ is checked on each row."""
         filt = urllib.parse.quote(
             "and(classification[in_any]:vc_backed,growth_stage[nin_any]:412,taxonomy_id[nin_any]:1102801)"
         )
