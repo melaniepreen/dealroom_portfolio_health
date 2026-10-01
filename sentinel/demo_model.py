@@ -17,7 +17,7 @@ def build():
     propensity=-4.8+.08*x[:,0]+1.25*x[:,1]+.38*x[:,2]+1.1*x[:,3]-.06*x[:,4]
     latent=rng.uniform(size=n)
     company=np.array([[24,1.8,6,1,9]],dtype=float)
-    output={'name':'Asterion Quantum','industry':'Deep technology · Quantum photonics','series':'Seed','next_stage':'Series A','last_venture_round':'Oct 2024','as_of':'2026-10-01','synthetic':True,'model_version':'xgboost-synthetic-demo-v1','training_rows':1800,'test_rows':600,'horizons':{}}
+    output={'name':'Asterion Quantum','industry':'Deep technology · Quantum photonics','series':'Seed','next_stage':'Series A','last_venture_round':'Oct 2024','as_of':'2026-10-01','synthetic':True,'model_inputs':dict(zip(FEATURES,company[0].tolist())),'model_version':'xgboost-synthetic-demo-v1','training_rows':1800,'test_rows':600,'horizons':{}}
     for horizon,offset in [(3,0),(6,.9)]:
         y=(latent < 1/(1+np.exp(-(propensity+offset)))).astype(int)
         model=xgb.XGBClassifier(n_estimators=120,max_depth=3,learning_rate=.055,min_child_weight=8,reg_lambda=4,random_state=42,n_jobs=2,eval_metric='logloss')

@@ -6,6 +6,13 @@
   "last_venture_round": "Oct 2024",
   "as_of": "2026-10-01",
   "synthetic": true,
+  "model_inputs": {
+    "months_since_round": 24.0,
+    "revenue_growth": 1.8,
+    "paid_pilots": 6.0,
+    "technical_milestone": 1.0,
+    "runway_months": 9.0
+  },
   "model_version": "xgboost-synthetic-demo-v1",
   "training_rows": 1800,
   "test_rows": 600,

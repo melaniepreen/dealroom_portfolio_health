@@ -1,61 +1,62 @@
+
 'use strict';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = value => value == null ? '—' : `${Math.round(value * 100)}%`;
 const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(value)) : 'Unavailable';
-let portfolio = [], alerts = [], descending = true, requestId = 0, horizon = 3, loadId = 0;
+let portfolio = [], alerts = [], demo = null, descending = true, requestId = 0, horizon = 3;
 const dialog = $('detail');
-const ring = score => `<div class="ring" style="--score:${score}"><svg viewBox="0 0 96 96" aria-hidden="true"><circle class="track" cx="48" cy="48" r="42"/><circle class="fill" cx="48" cy="48" r="42"/></svg><span class="ring-value">${pct(score)}<small>probability</small></span></div>`;
+const ring = score => `<div class="ring" style="--score:${score}"><svg viewBox="0 0 96 96" aria-hidden="true"><circle class="track" cx="48" cy="48" r="42"/><circle class="fill" cx="48" cy="48" r="42"/></svg><span class="ring-value">${pct(score)}<small>demo model</small></span></div>`;
 async function load() {
-  const currentLoad = ++loadId;
-  const selectedHorizon = horizon;
   $('error').hidden = true;
-  document.querySelectorAll('[data-horizon]').forEach(button => button.disabled = true);
+  document.querySelectorAll('[data-horizon]').forEach(b => b.disabled = true);
   try {
-    const response = await fetch(`/portfolio?horizon=${selectedHorizon}`);
-    if (!response.ok) throw new Error('Portfolio unavailable');
-    const data = await response.json();
-    if (currentLoad !== loadId) return;
-    portfolio = data.companies;
+    const responses = await Promise.all([fetch(`/portfolio?horizon=${horizon}`),fetch('/static/demo.json')]);
+    if (responses.some(r => !r.ok)) throw new Error('Unavailable');
+    const [data, example] = await Promise.all(responses.map(r => r.json()));
+    demo = example;
+    portfolio = [...data.companies, {...demo, model_score: demo.horizons[String(horizon)].score}];
     alerts = data.alerts;
-    const scored = portfolio.filter(c => c.model_score != null).sort((a,b) => b.model_score-a.model_score || a.name.localeCompare(b.name));
-    const high = scored.filter(c => c.model_score >= .7);
-    $('signal-count').textContent = high.length;
-    $('nav-count').textContent = high.length;
     $('company-count').textContent = portfolio.length;
-    const latest = portfolio.map(c => c.as_of).filter(Boolean).sort().at(-1);
-    $('data-date').textContent = latest ? `Model as of ${date(latest)}` : 'No model scores yet';
-    $('data-source').textContent = portfolio.some(c => c.recorded_example) ? 'Recorded example data' : 'Live Dealroom records · Experimental model';
-    $('signal-cards').classList.toggle('two-signals', high.length === 2);
-    $('signal-cards').innerHTML = high.length ? high.slice(0,3).map((c,i) => `<a href="/?company=${encodeURIComponent(c.name)}" class="signal-card" data-company="${esc(c.name)}"><div class="card-top"><span class="signal-label">High signal</span><span class="card-rank">${i === 0 ? 'TOP SIGNAL' : 'ON THE RADAR'}</span></div><div class="card-main"><div><h3>${esc(c.name)}</h3><span class="industry">${esc(c.industry)}</span></div>${ring(c.model_score)}</div><div class="card-bottom"><span>Potential next raise <strong>· ${esc(c.next_stage || 'Unclassified')}</strong></span><span class="card-arrow" aria-hidden="true">↗</span></div></a>`).join('') : `<div class="loading">No company currently has a validated estimate above the 70% high-signal threshold over ${horizon} months. Missing scores mean there is not enough evidence to score the company.</div>`;
-    const report = data.model?.metrics?.horizons?.[String(horizon)];
-    if (report && !report.published && data.model?.metrics?.experimental) {
-      $('signal-cards').innerHTML = '<div class="loading"><strong>Real data loaded. Scores awaiting validation.</strong><br>The model has been fitted to live Dealroom funding histories, but the independent evaluation sample has too few next-stage raises to support probabilities.</div>';
-    }
-    document.querySelector('.model-note').textContent = data.model?.metrics?.experimental ? `Experimental XGBoost · ${data.model.metrics.companies} real API companies · Funding history only. ${report?.reason || 'Validation pending'} High signal ≥ 70%.` : `High signal ≥ 70% · XGBoost estimate of reaching the next funding stage within ${horizon} months. Confirm timing with founders.`;
-    $('signal-horizon').textContent = `XGBoost · Next ${horizon} months`;
+    $('nav-count').textContent = portfolio.filter(c => c.model_score >= .7).length;
+    $('data-date').textContent = `As of ${date(demo.as_of)}`;
+    $('data-source').textContent = 'Dealroom · XGBoost';
     $('sort-label').textContent = `${horizon}-month signal`;
-    $('outlook-period').textContent = horizon === 3 ? 'THE NEXT THREE MONTHS' : 'THE NEXT SIX MONTHS';
-    document.querySelectorAll('[data-horizon]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.horizon) === horizon)));
-    renderOutlook(data, latest, high);
+    document.querySelectorAll('[data-horizon]').forEach(b => b.setAttribute('aria-pressed',String(Number(b.dataset.horizon)===horizon)));
     const selected = $('stage').value;
-    $('stage').innerHTML = '<option value="">All stages</option>' + [...new Set(portfolio.map(c=>c.series).filter(Boolean))].map(stage=>`<option>${esc(stage)}</option>`).join('');
+    $('stage').innerHTML = '<option value="">All stages</option>' + [...new Set(portfolio.map(c=>c.series).filter(Boolean))].map(s=>`<option>${esc(s)}</option>`).join('');
     $('stage').value = selected;
+    renderSignal();
     renderRows();
     const name = new URLSearchParams(location.search).get('company');
     if (name) openDetail(name);
   } catch (error) {
     $('error').hidden = false;
-    $('signal-cards').innerHTML = '';
-    $('outlook-intro').textContent = 'Live portfolio unavailable. Retry to see an evidence-based outlook.';
-    $('outlook-actions').innerHTML = '';
-    $('data-date').textContent = 'Portfolio unavailable';
-    $('showing').textContent = 'Unable to load companies';
+    $('raise-content').textContent = 'Signal unavailable. Please retry.';
     portfolio = [];
     renderRows();
   } finally {
-    document.querySelectorAll('[data-horizon]').forEach(button => button.disabled = false);
+    document.querySelectorAll('[data-horizon]').forEach(b => b.disabled = false);
   }
+}
+function renderSignal() {
+  const result=demo.horizons[String(horizon)];
+  const reasons=result.evidence.filter(r=>r.contribution>0).slice(0,3);
+  $('raise-content').innerHTML = `<div class="raise-main"><div><p class="raise-kicker">Seed → Series A <span class="demo-chip">Demo</span></p><button class="raise-company" data-company="${esc(demo.name)}">${esc(demo.name)} <span aria-hidden="true">↗</span></button><p class="raise-description">The synthetic-data XGBoost model estimates a next-stage raise likelihood of ${pct(result.score)} within ${horizon} months.</p></div>${ring(result.score)}</div><div class="raise-reasons">${reasons.map(r=>`<div><strong>${esc(r.value)}</strong><span>${esc(r.label)}</span></div>`).join('')}</div><div class="raise-bottom"><span>Top positive contributors to this company’s prediction</span><button class="model-link" data-company="${esc(demo.name)}">View model evidence ↗</button></div>`;
+}
+function demoModelCharts(result) {
+  const horizons=Object.entries(demo.horizons);
+  const predictionChart=`<svg viewBox="0 0 640 230" role="img" aria-label="Synthetic XGBoost next-raise predictions: ${horizons.map(([h,r])=>`${h} months ${pct(r.score)}`).join(', ')}"><title>Next-raise likelihood by prediction horizon</title>${[0,25,50,75,100].map(v=>`<line x1="76" y1="${180-v*1.4}" x2="605" y2="${180-v*1.4}" stroke="#e0e4dc"/><text x="60" y="${184-v*1.4}" text-anchor="end" fill="#747d75" font-size="12">${v}%</text>`).join('')}${horizons.map(([h,r],i)=>`<rect x="${165+i*250}" y="${180-r.score*140}" width="110" height="${r.score*140}" rx="6" fill="${Number(h)===horizon?'#426951':'#a6b89a'}"/><text x="${220+i*250}" y="${170-r.score*140}" text-anchor="middle" fill="#243c36" font-size="17">${pct(r.score)}</text><text x="${220+i*250}" y="207" text-anchor="middle" fill="#747d75" font-size="13">${h} months</text>`).join('')}</svg>`;
+  const max=Math.max(...result.evidence.map(r=>Math.abs(r.contribution)),.001);
+  const drivers=`<div class="driver-chart" role="img" aria-label="Company-specific model contributions in log-odds">${result.evidence.map(r=>`<div class="driver-row"><div class="driver-label"><span>${esc(r.label)}</span><strong>${r.contribution>=0?'+':''}${r.contribution.toFixed(3)}</strong></div><div class="driver-track"><span style="width:${Math.abs(r.contribution)/max*100}%;background:${r.contribution>=0?'#68835c':'#af8065'}"></span></div><small>${esc(r.value)}</small></div>`).join('')}</div>`;
+  return `<section class="detail-section"><h3>Next-raise models</h3><p class="detail-note">Separate XGBoost models for each horizon · Seed → Series A</p>${predictionChart}<div class="demo-model-grid">${horizons.map(([h,r])=>`<div class="demo-model-card"><small>${h}-MONTH XGBOOST</small><strong>${pct(r.score)}</strong><span>Synthetic test Brier score ${r.brier_synthetic_test.toFixed(3)}</span></div>`).join('')}</div></section><section class="detail-section"><h3>What drives the ${horizon}-month signal</h3>${drivers}<p class="detail-note">TreeSHAP contributions in log-odds. Positive values push this company’s score up; they describe the model calculation, not causation.</p></section>`;
+}
+function openDemo() {
+  requestId++;
+  const result=demo.horizons[String(horizon)];
+  history.replaceState(null,'',`/?company=${encodeURIComponent(demo.name)}`);
+  $('detail-content').innerHTML=`<p class="raise-kicker">Deep technology · Quantum photonics <span class="demo-chip">Demo</span></p><h2 id="detail-title">${esc(demo.name)}</h2><div class="detail-stats"><div><small>NEXT ${horizon} MONTHS</small><strong>${pct(result.score)}</strong></div><div><small>CURRENT STAGE</small><strong>Seed</strong></div><div><small>NEXT STAGE</small><strong>Series A</strong></div></div>${demoModelCharts(result)}<section class="detail-section"><h3>Why the model flags this company</h3><p>The company’s synthetic profile includes 180% annual revenue growth, six paid pilots, a completed technical milestone, nine months of runway and 24 months since its last round.</p><div class="table-scroll"><table class="feature-list"><thead><tr><th>Model input</th><th>Company value</th><th>Contribution</th></tr></thead><tbody>${result.evidence.map(r=>`<tr><td>${esc(r.label)}</td><td>${esc(r.value)}</td><td>${r.contribution>0?'+':''}${r.contribution.toFixed(3)}</td></tr>`).join('')}</tbody></table></div><p class="detail-note">Company-specific TreeSHAP contributions are in log-odds: positive values push the prediction up. These describe this model’s calculation, not causation.</p></section><section class="detail-section"><h3>Training evidence</h3><p>XGBoost was fitted on ${demo.training_rows.toLocaleString()} synthetic company profiles and checked against ${demo.test_rows} separate synthetic profiles. The ${horizon}-month synthetic test Brier score is ${result.brier_synthetic_test.toFixed(3)} (lower is better).</p><p class="detail-note">${esc(demo.model_version)}. Training labels were simulated from funding cadence, revenue growth, pilots, technical milestones and runway. This fictional company and its computed score are isolated from the live Dealroom model; synthetic test results do not establish real-world accuracy.</p><h3>Investor follow-up</h3><p>Confirm pilot-to-contract conversion, benchmark reproducibility and the founders’ financing timetable before discussing the Series A.</p></section>`;
+  if (!dialog.open) dialog.showModal();
 }
 function renderRows() {
   const query = $('search').value.trim().toLowerCase();
@@ -65,14 +66,15 @@ function renderRows() {
     if (b.model_score == null) return -1;
     return (descending ? b.model_score-a.model_score : a.model_score-b.model_score) || a.name.localeCompare(b.name);
   });
-  $('company-rows').innerHTML = rows.map(c => `<tr><td><div class="company-cell"><span class="company-icon" aria-hidden="true">${esc(c.name.charAt(0).toLowerCase())}</span><div><button class="company-name" data-company="${esc(c.name)}">${esc(c.name)}</button><span class="company-sector">${esc(c.industry)}</span></div></div></td><td><span class="stage-badge">${esc(c.series || 'Unknown')}</span></td><td class="last-round">${esc(c.last_venture_round || 'Unavailable')}</td><td><div class="score-cell"><span title="${esc(c.model_score == null ? (c.missing_features || []).join('; ') : 'Experimental calibrated estimate')}">${pct(c.model_score)}</span><span class="mini-track" aria-hidden="true"><i style="width:${c.model_score == null ? 0 : c.model_score*100}%"></i></span></div></td><td class="next-stage">${esc(c.next_stage || 'Unknown')}</td><td><button class="row-open" data-company="${esc(c.name)}" aria-label="View ${esc(c.name)}">↗</button></td></tr>`).join('');
+  $('company-rows').innerHTML = rows.map(c => `<tr><td><div class="company-cell"><span class="company-icon" aria-hidden="true">${esc(c.name.charAt(0).toLowerCase())}</span><div><button class="company-name" data-company="${esc(c.name)}">${esc(c.name)}${c.synthetic ? ' <span class="demo-chip">Demo</span>' : ''}</button><span class="company-sector">${esc(c.industry)}</span></div></div></td><td><span class="stage-badge">${esc(c.series || 'Unknown')}</span></td><td class="last-round">${esc(c.last_venture_round || 'Unavailable')}</td><td><div class="score-cell"><span title="${esc(c.model_score == null ? (c.missing_features || []).join('; ') : c.synthetic ? 'XGBoost score trained on synthetic data' : 'Experimental calibrated estimate')}">${pct(c.model_score)}</span><span class="mini-track" aria-hidden="true"><i style="width:${c.model_score == null ? 0 : c.model_score*100}%"></i></span></div></td><td class="next-stage">${esc(c.next_stage || 'Unknown')}</td><td><button class="row-open" data-company="${esc(c.name)}" aria-label="View ${esc(c.name)}">↗</button></td></tr>`).join('');
   $('empty').hidden = !!rows.length;
-  $('showing').textContent = `${rows.length} of ${portfolio.length} companies`;
+  $('showing').textContent = `${rows.length} of ${portfolio.length} companies · 1 demo`;
   $('sort').setAttribute('aria-label', `Sort ${horizon}-month signal ${descending ? 'ascending' : 'descending'}`);
   $('sort').closest('th').setAttribute('aria-sort', descending ? 'descending' : 'ascending');
   $('sort-direction').textContent = descending ? '↓' : '↑';
 }
 async function openDetail(name) {
+  if (demo && name === demo.name) { openDemo(); return; }
   const id = ++requestId;
   $('detail-content').innerHTML = `<h2 id="detail-title">${esc(name)}</h2><p class="detail-note" role="status">Loading company intelligence…</p>`;
   if (!dialog.open) dialog.showModal();
@@ -105,41 +107,10 @@ $('sort').addEventListener('click',()=>{descending=!descending;renderRows();});
 $('retry').addEventListener('click',load);
 load();
 
-function renderOutlook(data, asOf, high) {
-  let windowText = `${horizon} months from the model snapshot`;
-  if (asOf) {
-    const end = new Date(asOf);
-    end.setUTCMonth(end.getUTCMonth() + horizon);
-    windowText = `${date(asOf)} – ${date(end.toISOString())}`;
-  }
-  $('horizon-window').textContent = windowText;
-  $('horizon-notes-title').textContent = horizon === 3 ? 'A three-month window' : 'A six-month window';
-  $('demo-signal-label').textContent = `Illustrative ${horizon}-month high signal`;
-  const report = data.model?.metrics?.horizons?.[String(horizon)];
-  const published = report?.published === true;
-  $('outlook-intro').textContent = published ? (high.length ? `${high.length} companies clear the ${horizon}-month high-signal threshold. Use the evidence below to prioritise founder conversations.` : `No company clears the ${horizon}-month high-signal threshold. Watch for commercial and funding milestones before changing priorities.`) : 'Focus on the next milestone, then the next round. Live probabilities are awaiting validation; these are diligence priorities, not model-backed fundraising recommendations.';
-  const seeds = portfolio.filter(c => c.series === 'Seed').map(c => c.name);
-  const missing = portfolio.filter(c => !c.last_venture_round).map(c => c.name);
-  $('outlook-actions').innerHTML = `<article><span class="outlook-number">${horizon === 3 ? 'MONTH 1' : 'MONTHS 1–2'}</span><h3>Follow commercial progress</h3><p>${seeds.length ? esc(seeds.join(', ')) + ' are recorded at Seed. ' : ''}Look for paid customer conversion, retention and delivery against the milestones needed for a next-stage round.</p></article><article><span class="outlook-number">${horizon === 3 ? 'MONTH 2' : 'MONTHS 3–4'}</span><h3>Close the evidence gaps</h3><p>${missing.length ? esc(missing.join(' and ')) + ' have no recorded venture-round history in this import. ' : ''}Confirm financing dates, cash runway and the founders’ intended timetable directly.</p></article><article><span class="outlook-number">${horizon === 3 ? 'MONTH 3' : 'MONTHS 5–6'}</span><h3>Watch technical milestones</h3><p>For deep-tech opportunities, track independently verified performance, pilot-to-contract conversion and the capital required to reach the next engineering milestone.</p></article>`;
-  $('horizon-caution').textContent = `Selected horizon: ${horizon} months (${windowText}). The outcome is a recorded transition to the next standardised stage. The backend fits 3-, 6- and 9-month models; all current live horizons remain experimental.`;
-  $('validation-caution').textContent = published ? 'This experimental model passed its minimum validation checks. Its estimates still depend on the sample and reporting coverage.' : 'Live scores are withheld because the independent groups have too few next-stage outcomes. An unavailable score does not mean low fundraising potential.';
-  const sets = report?.sets;
-  $('validation-counts').textContent = sets ? `${horizon}-month model: ${sets.train.snapshots} training snapshots (${sets.train.positive} positive outcomes); ${sets.calibration.positive} positives in calibration and ${sets.test.positive} in testing. These are repeated snapshots, not distinct fundraising events.` : 'Validation sample counts are unavailable.';
-}
-$('show-demo').addEventListener('change', () => {
-  $('demo-example').hidden = !$('show-demo').checked;
-  document.querySelector('.demo-footnote').hidden = !$('show-demo').checked;
-});
-$('demo-detail').addEventListener('click', () => {
-  requestId++;
-  $('detail-content').innerHTML = `<span class="demo-badge">SYNTHETIC COMPANY · DEMO ONLY</span><h2 id="detail-title">Asterion Quantum</h2><p class="detail-subtitle">Deep technology · Quantum photonics</p><div class="detail-stats"><div><small>ILLUSTRATIVE SIGNAL</small><strong>84 / 100</strong></div><div><small>SCENARIO HORIZON</small><strong>${horizon} months</strong></div><div><small>POTENTIAL NEXT ROUND</small><strong>Series A</strong></div></div><p class="detail-note">The score is a preset demonstration value, not output from the live XGBoost model. All facts below are invented.</p><section class="detail-section"><h3>The hypothetical opportunity</h3><p>A Seed-stage photonics company raised £4m 18 months ago. It has two paid industrial pilots and is preparing an independently reviewed prototype benchmark.</p><h3>What would make a conversation timely?</h3><p>Signed annual contracts, reproducible technical performance, a costed manufacturing plan and a founder-confirmed Series A timetable within ${horizon} months.</p><h3>What could change the assessment?</h3><p>Pilot cancellations, failed benchmarks, low production yield, unverified runway or a capital requirement beyond the proposed round.</p><h3>What the live model can actually see</h3><p>Only dated funding-history features. The pilot, technical and runway evidence described here would require additional verified data and a separately validated model before it could influence a real score.</p></section>`;
-  if (!dialog.open) dialog.showModal();
-});
 
 document.querySelectorAll('[data-horizon]').forEach(button => button.addEventListener('click', () => {
-  const next = Number(button.dataset.horizon);
-  if (next === horizon) return;
-  horizon = next;
+  if (Number(button.dataset.horizon) === horizon) return;
+  horizon = Number(button.dataset.horizon);
   if (dialog.open) dialog.close();
   load();
 }));
