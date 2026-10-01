@@ -1,0 +1,7 @@
+.env
+*.env
+.dealroom-token
+.git
+.pytest_cache
+__pycache__
+models
