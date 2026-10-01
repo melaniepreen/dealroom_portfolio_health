@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "portfolio-sentinel": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
