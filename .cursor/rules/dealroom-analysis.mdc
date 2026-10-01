@@ -1,0 +1,15 @@
+---
+description: Default filters and tag rules for every Dealroom count, ranking, or chart
+alwaysApply: true
+---
+
+# Dealroom numbers
+
+Before any count, ranking, share, funding trend, valuation, or chart, read `apis/dealroom-api-analysis.md` and apply it.
+
+- VC funding: `is_vc_round[eq]:true` (or the `vc_funding` metric), exclude Mature (`growth_stage[nin_any]:412`) and Outside Tech (`taxonomy_id[nin_any]:1102801`). Do not add round-name exclusions. Attribute to HQ only.
+- Valuation, enterprise value, and unicorns: those two exclusions plus `launch_date[gte]:1990`. Do not exclude the mature-company sector tag unless asked. Attribute to HQ or founding. A unicorn query uses these defaults.
+- Company counts, people, and jobs: no default exclusions.
+- Use one geography key. Do not sum HQ-or-founding country columns into a total. "Europe" means the region; name which Europe you used.
+- Filter tags only with `taxonomy_id`. Decode the last two digits of every ID. Prefer the typed family over a same-named sector tag. Broad verticals use industry. Put a cross-cutting theme on its own `taxonomy_id` leg.
+- Compare stage on the standardised round. VC funding is not total funding. Company funding totals are all-time. Treat an empty slice as a query problem until checked. Label the current year as partial, and report truncated pages.
